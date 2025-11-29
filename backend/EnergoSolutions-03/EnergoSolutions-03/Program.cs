@@ -1,9 +1,18 @@
+using System.Globalization;
+using System.Net.Http.Headers;
 using EnergoSolutions_03.Abstraction;
 using EnergoSolutions_03.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
+builder.Services.Configure<RequestLocalizationOptions>(options =>
+{
+    var supportedCultures = new[] { new CultureInfo("sk-SK"), new CultureInfo("en-US") };
+    options.DefaultRequestCulture = new Microsoft.AspNetCore.Localization.RequestCulture("sk-SK");
+    options.SupportedCultures = supportedCultures.ToList();
+    options.SupportedUICultures = supportedCultures.ToList();
+});
 
 builder.Services.AddControllers();
 
@@ -29,6 +38,13 @@ builder.Services.AddHttpClient<ISolarService, SolarService>(client =>
 {
     client.BaseAddress = new Uri("https://re.jrc.ec.europa.eu/api/v5_2/");
     client.DefaultRequestHeaders.UserAgent.ParseAdd("GreenEnergyApp/1.0");
+});
+
+builder.Services.AddHttpClient<IChatService, ChatService>(client =>
+{
+    client.BaseAddress = new Uri("https://api.openai.com/v1/");
+    client.DefaultRequestHeaders.Authorization =
+        new AuthenticationHeaderValue("Bearer", builder.Configuration["OpenAI:ApiKey"]);
 });
 
 builder.Services.AddScoped<ISummaryService, SummaryService>();
