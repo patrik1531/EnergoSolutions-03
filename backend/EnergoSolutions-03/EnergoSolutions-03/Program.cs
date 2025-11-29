@@ -13,6 +13,17 @@ builder.Services.AddHttpClient<IGeocodingService, GeocodingService>(client =>
     client.DefaultRequestHeaders.UserAgent.ParseAdd("GreenEnergyApp/1.0");
 });
 
+builder.Services.AddHttpClient<IClimateService, ClimateService>(client =>
+{
+    client.BaseAddress = new Uri("https://archive-api.open-meteo.com/");
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("GreenEnergyApp/1.0");
+});
+
+builder.Services.AddHttpClient<IWindService, WindService>(c =>
+{
+    c.BaseAddress = new Uri("https://archive-api.open-meteo.com/");
+    c.DefaultRequestHeaders.UserAgent.ParseAdd("GreenEnergyApp/1.0");
+});
 
 // Add Swashbuckle/Swagger generator
 builder.Services.AddEndpointsApiExplorer();

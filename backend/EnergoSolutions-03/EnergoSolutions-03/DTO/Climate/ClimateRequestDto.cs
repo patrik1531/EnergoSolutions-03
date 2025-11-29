@@ -2,6 +2,6 @@ namespace EnergoSolutions_03.DTO.Climate;
 
 public class ClimateRequestDto
 {
-    public double Lat { get; set; }
-    public double Lon { get; set; }
+    public float Lat { get; set; }
+    public float Lon { get; set; }
 }

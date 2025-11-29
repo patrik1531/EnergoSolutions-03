@@ -1,6 +1,6 @@
-namespace EnergoSolutions_03.DTO.Climate;
+namespace EnergoSolutions_03.DTO.Wind;
 
-public class PeriodDto
+public class WindPeriodDto
 {
     public string StartDate { get; set; }
     public string EndDate { get; set; }
