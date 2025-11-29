@@ -1,0 +1,22 @@
+# Core dependencies
+Flask==3.0.0
+flask-cors==4.0.0
+
+# HTTP requests
+requests==2.31.0
+
+# Environment variables
+python-dotenv==1.0.0
+
+# For PDF generation (optional - add later if needed)
+# reportlab==4.0.8
+# pypdf==3.17.0
+
+# For OpenAI integration (add when ready)
+# openai==1.0.0
+
+# Utilities
+python-dateutil==2.8.2
+
+# Development
+pytest==7.4.3
