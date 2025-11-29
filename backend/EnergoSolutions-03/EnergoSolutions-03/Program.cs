@@ -19,11 +19,19 @@ builder.Services.AddHttpClient<IClimateService, ClimateService>(client =>
     client.DefaultRequestHeaders.UserAgent.ParseAdd("GreenEnergyApp/1.0");
 });
 
-builder.Services.AddHttpClient<IWindService, WindService>(c =>
+builder.Services.AddHttpClient<IWindService, WindService>(client =>
 {
-    c.BaseAddress = new Uri("https://archive-api.open-meteo.com/");
-    c.DefaultRequestHeaders.UserAgent.ParseAdd("GreenEnergyApp/1.0");
+    client.BaseAddress = new Uri("https://archive-api.open-meteo.com/");
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("GreenEnergyApp/1.0");
 });
+
+builder.Services.AddHttpClient<ISolarService, SolarService>(client =>
+{
+    client.BaseAddress = new Uri("https://re.jrc.ec.europa.eu/api/v5_2/");
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("GreenEnergyApp/1.0");
+});
+
+builder.Services.AddScoped<ISummaryService, SummaryService>();
 
 // Add Swashbuckle/Swagger generator
 builder.Services.AddEndpointsApiExplorer();
