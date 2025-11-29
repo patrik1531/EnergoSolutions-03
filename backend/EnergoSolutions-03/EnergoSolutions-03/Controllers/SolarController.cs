@@ -1,27 +1,27 @@
 using EnergoSolutions_03.Abstraction;
-using EnergoSolutions_03.DTO.Wind;
+using EnergoSolutions_03.DTO.Solar;
 using Microsoft.AspNetCore.Mvc;
 
 namespace EnergoSolutions_03.Controllers;
 
 [ApiController]
-[Route("api/[controller]")]
-public class WindController : ControllerBase
+[Route("api/solar")]
+public class SolarController : ControllerBase
 {
-    private readonly IWindService _service;
+    private readonly ISolarService _service;
 
-    public WindController(IWindService service)
+    public SolarController(ISolarService service)
     {
         _service = service;
     }
 
     [HttpPost]
-    public async Task<IActionResult> Calculate([FromBody] WindRequestDto dto)
+    public async Task<IActionResult> Calculate([FromBody] SolarRequestDto dto)
     {
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        var result = await _service.GetWindStatsAsync(dto);
+        SolarResponseDto? result = await _service.GetSolarResourceAsync(dto);
         if (result is null)
             return BadRequest();
 
