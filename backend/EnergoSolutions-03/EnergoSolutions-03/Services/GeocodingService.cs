@@ -22,10 +22,8 @@ public class GeocodingService : IGeocodingService
         _http = http;
     }
 
-    public async Task<GeocodeResponseDto?> GeocodeAsync(GeocodeRequestDto request)
+    public async Task<GeocodeResponseDto?> GeocodeAsync(string address)
     {
-        string address = request.Address;
-
         var url = $"search?q={Uri.EscapeDataString(address)}&format=json&limit=1";
 
         var response = await _http.GetAsync(url);

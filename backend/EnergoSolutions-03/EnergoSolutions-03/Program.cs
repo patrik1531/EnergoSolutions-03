@@ -1,9 +1,24 @@
 using System.Globalization;
 using System.Net.Http.Headers;
 using EnergoSolutions_03.Abstraction;
+using EnergoSolutions_03.Agents;
 using EnergoSolutions_03.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+
+
+
+
+builder.Services.AddSingleton<IOpenAIService, OpenAIService>();
+builder.Services.AddSingleton<IWeatherApiService, WeatherApiService>();
+builder.Services.AddSingleton<ISessionManager, SessionManager>();
+
+// Register agents
+builder.Services.AddScoped<IDataCollectorAgent, DataCollectorAgent>();
+builder.Services.AddScoped<IAnalysisAgent, AnalysisAgent>();
+builder.Services.AddScoped<ICalculationAgent, CalculationAgent>();
+builder.Services.AddScoped<IReportAgent, ReportAgent>();
+builder.Services.AddScoped<IAgentOrchestrator, AgentOrchestrator>();
 
 // Add services to the container.
 builder.Services.Configure<RequestLocalizationOptions>(options =>
@@ -48,6 +63,17 @@ builder.Services.AddHttpClient<IChatService, ChatService>(client =>
 });
 
 builder.Services.AddScoped<ISummaryService, SummaryService>();
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("FrontendPolicy", policy =>
+    {
+        policy
+            .WithOrigins("10.10.95.105:3000")
+            .AllowAnyHeader()
+            .AllowAnyMethod();
+    });
+});
 
 // Add Swashbuckle/Swagger generator
 builder.Services.AddEndpointsApiExplorer();
