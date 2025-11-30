@@ -1,30 +1,57 @@
-using EnergoSolutions_03.Abstraction;
-using EnergoSolutions_03.DTO.Chat;
+using EnergoSolutions_03.Agents;
+using EnergoSolutions_03.Models.Chat;
 using Microsoft.AspNetCore.Mvc;
 
-namespace EnergoSolutions_03.Controllers.Chat;
-
 [ApiController]
-[Route("api/chat")]
+[Route("api/[controller]")]
 public class ChatController : ControllerBase
 {
-    private readonly IChatService _service;
+    private readonly IAgentOrchestrator _orchestrator;
 
-    public ChatController(IChatService service)
+    public ChatController(IAgentOrchestrator orchestrator)
     {
-        _service = service;
+        _orchestrator = orchestrator;
     }
 
-    [HttpPost]
-    public async Task<IActionResult> Ask([FromBody] ChatRequestDto dto)
+    [HttpPost("message")]
+    public async Task<IActionResult> SendMessage([FromBody] ChatRequest request)
     {
-        if (!ModelState.IsValid)
-            return BadRequest(ModelState);
+        try
+        {
+            var response = await _orchestrator.ProcessMessage(request.SessionId, request.Message);
+            return Ok(new ChatResponse 
+            { 
+                Message = response.Message,
+                IsComplete = response.IsComplete,
+                SessionId = response.SessionId,
+                Progress = response.Progress
+            });
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
 
-        var result = await _service.AskAsync(dto);
-        if (result == null)
-            return StatusCode(502, "Failed to reach OpenAI");
+    [HttpPost("start")]
+    public async Task<IActionResult> StartChat()
+    {
+        var sessionId = await _orchestrator.StartNewSession();
+        var welcomeMessage = await _orchestrator.ProcessMessage(sessionId, "");
+            
+        return Ok(new ChatResponse
+        {
+            SessionId = sessionId,
+            Message = welcomeMessage.Message,
+            IsComplete = false,
+            Progress = 0
+        });
+    }
 
-        return Ok(result);
+    [HttpGet("status/{sessionId}")]
+    public async Task<IActionResult> GetStatus(string sessionId)
+    {
+        var status = await _orchestrator.GetSessionStatus(sessionId);
+        return Ok(status);
     }
 }

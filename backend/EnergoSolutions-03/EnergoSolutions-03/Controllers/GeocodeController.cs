@@ -24,7 +24,7 @@ public class GeocodeController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Address))
             return BadRequest("Address is required.");
 
-        var result = await _geo.GeocodeAsync(request);
+        var result = await _geo.GeocodeAsync(request.Address);
 
         if (result is null)
             return NotFound();

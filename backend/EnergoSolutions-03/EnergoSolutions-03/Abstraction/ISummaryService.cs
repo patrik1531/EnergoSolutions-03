@@ -4,5 +4,5 @@ namespace EnergoSolutions_03.Abstraction;
 
 public interface ISummaryService
 {
-    Task<SummaryResponseDto> BuildSummaryAsync(SummaryRequestDto dto);
+    Task<SummaryResponseDto> BuildSummaryAsync(float lat, float lon);
 }

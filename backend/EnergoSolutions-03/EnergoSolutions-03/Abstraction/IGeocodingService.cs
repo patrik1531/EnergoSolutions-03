@@ -5,5 +5,5 @@ namespace EnergoSolutions_03.Abstraction;
 
 public interface IGeocodingService
 {
-    Task<GeocodeResponseDto?> GeocodeAsync(GeocodeRequestDto request);
+    Task<GeocodeResponseDto?> GeocodeAsync(string address);
 }

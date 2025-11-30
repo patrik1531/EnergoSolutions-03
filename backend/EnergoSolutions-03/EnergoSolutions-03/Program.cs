@@ -1,9 +1,30 @@
 using System.Globalization;
 using System.Net.Http.Headers;
 using EnergoSolutions_03.Abstraction;
+using EnergoSolutions_03.Agents;
 using EnergoSolutions_03.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+
+
+
+
+builder.Services.AddHttpClient<IOpenAIService, OpenAIService>(client =>
+{
+    client.BaseAddress = new Uri("https://api.openai.com/v1/");
+    client.DefaultRequestHeaders.Authorization =
+        new AuthenticationHeaderValue("Bearer", builder.Configuration["OpenAI:ApiKey"]);
+});
+
+builder.Services.AddSingleton<IWeatherApiService, WeatherApiService>();
+builder.Services.AddSingleton<ISessionManager, SessionManager>();
+
+// Register agents
+builder.Services.AddScoped<IDataCollectorAgent, DataCollectorAgent>();
+builder.Services.AddScoped<IAnalysisAgent, AnalysisAgent>();
+builder.Services.AddScoped<ICalculationAgent, CalculationAgent>();
+builder.Services.AddScoped<IReportAgent, ReportAgent>();
+builder.Services.AddScoped<IAgentOrchestrator, AgentOrchestrator>();
 
 // Add services to the container.
 builder.Services.Configure<RequestLocalizationOptions>(options =>
@@ -49,6 +70,17 @@ builder.Services.AddHttpClient<IChatService, ChatService>(client =>
 
 builder.Services.AddScoped<ISummaryService, SummaryService>();
 
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAll", policy =>
+    {
+        policy
+            .AllowAnyOrigin()
+            .AllowAnyHeader()
+            .AllowAnyMethod();
+    });
+});
+
 // Add Swashbuckle/Swagger generator
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options => {
@@ -72,6 +104,8 @@ if(app.Environment.IsDevelopment()) {
 app.UseHttpsRedirection();
 
 app.UseAuthorization();
+
+app.UseCors("AllowAll");
 
 app.MapControllers();
 
