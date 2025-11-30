@@ -15,13 +15,13 @@ public class SummaryController : ControllerBase
         _service = service;
     }
 
-    [HttpPost]
-    public async Task<IActionResult> GetSummary([FromBody] SummaryRequestDto dto)
+    [HttpPost("{lat}/{lon}")]
+    public async Task<IActionResult> GetSummary([FromRoute] float lat, [FromRoute] float lon)
     {
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        var result = await _service.BuildSummaryAsync(dto);
+        var result = await _service.BuildSummaryAsync(lat, lon);
         return Ok(result);
     }
 }

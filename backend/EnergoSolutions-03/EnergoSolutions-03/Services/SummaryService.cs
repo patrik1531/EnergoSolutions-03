@@ -22,14 +22,14 @@ public class SummaryService : ISummaryService
         _solar = solar;
     }
 
-    public async Task<SummaryResponseDto> BuildSummaryAsync(SummaryRequestDto dto)
+    public async Task<SummaryResponseDto> BuildSummaryAsync(float lat, float lon)
     {
         var output = new SummaryResponseDto
         {
             Location = new SummaryLocationDto
             {
-                Lat = dto.Lat,
-                Lon = dto.Lon
+                Lat = lat,
+                Lon = lon
             }
         };
 
@@ -39,7 +39,7 @@ public class SummaryService : ISummaryService
         try
         {
             ClimateResponseDto? heating = await _climate.GetClimateHeatingAsync(
-                new ClimateRequestDto { Lat = dto.Lat, Lon = dto.Lon });
+                new ClimateRequestDto { Lat = lat, Lon = lon });
 
             if (heating != null)
                 output.ClimateHeating = new SummaryHeatingDto { Data = heating };
@@ -57,7 +57,7 @@ public class SummaryService : ISummaryService
         try
         {
             WindResponseDto? wind = await _wind.GetWindStatsAsync(
-                new WindRequestDto { Lat = dto.Lat, Lon = dto.Lon });
+                new WindRequestDto { Lat = lat, Lon = lon });
 
             if (wind != null)
                 output.ClimateWind = new SummaryWindDto { Data = wind };
@@ -75,7 +75,7 @@ public class SummaryService : ISummaryService
         try
         {
             SolarResponseDto? solar = await _solar.GetSolarResourceAsync(
-                new SolarRequestDto { Lat = dto.Lat, Lon = dto.Lon });
+                new SolarRequestDto { Lat = lat, Lon = lon });
 
             if (solar != null)
                 output.SolarResource = new SummarySolarDto { Data = solar };

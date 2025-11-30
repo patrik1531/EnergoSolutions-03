@@ -94,37 +94,79 @@ public class DataCollectorAgent : IDataCollectorAgent
     private async Task<Dictionary<string, object>> ExtractInformation(string message, UserData currentData)
 {
     var prompt = $"""
-You are an information extraction assistant for an energy consulting chatbot.
+                  You are an information extraction assistant for an energy consulting chatbot.
+                  The user usually writes in Slovak (or Czech), sometimes very briefly (just a number or one word).
 
-USER MESSAGE:
-{message}
+                  USER MESSAGE:
+                  {message}
 
-CURRENT KNOWN DATA (JSON):
-{JsonSerializer.Serialize(currentData)}
+                  CURRENT KNOWN DATA (JSON):
+                  {JsonSerializer.Serialize(currentData)}
 
-Your task:
-- Analyze the user's message.
-- Extract any of the following fields if present.
-- If something is not mentioned, omit that field completely.
-
-Fields:
-- address: string (any place, street, village, town, city, postal code)
-- buildingType: string (one of: "family_house", "apartment", "company")
-- heatedAreaM2: number (heated floor area in m²)
-- insulationLevel: string (one of: "poor", "average", "good", "excellent")
-- electricityKwhYear: number (yearly electricity consumption in kWh)
-- heatingFuel: string (e.g. "gas", "electricity", "wood", "heat_pump")
-- roofAreaM2: number (usable roof area in m²)
-- phase: string ("1f" or "3f")
-
-If the user's message is irrelevant to the house / building / energy topic, respond with:
-{"irrelevant":true}
-
-VERY IMPORTANT:
-- Respond with ONE valid JSON object only.
-- No extra text, no explanations, no code fences.
-- If you only know some fields, include only those fields in the JSON.
-""";
+                  Your task:
+                  
+                  Analyze the users message (the user may write in Slovak or English).
+                  Accept text with or without punctuation, with typos, without diacritics, upper/lowercase mixed.
+                  Compare words case-insensitive and diacritic-insensitive.
+                  If a word is similar to the intended meaning (e.g. small typos), treat it as valid.
+                  Extract any of the following fields if present.
+                  The user may write numbers with or without units. Recognize formats like: 120, 120m2, 120 m², 4000 kwh, 3500kWh/year, 12.5, 12,5.
+                  If something is unclear, ask a short clarifying question in the same language the user used.
+                  If something is not mentioned, omit that field completely.
+                  
+                  Fields:
+                  
+                  address: string (any place, street, village, town, city, postal code)
+                  Accept standard Slovak shortcuts for cities: BA → Bratislava, KE → Košice, TT, NR, ZA, BB, TN, PO, ZV…
+                  Accept foreign shortcuts too (e.g. Wien → Vienna).
+                  
+                  buildingType: family_house, apartment, company
+                  
+                  heatedAreaM2: number
+                  
+                  insulationLevel: poor, average, good, excellent
+                  
+                  electricityKwhYear: number
+                  
+                  heatingFuel: string (gas, electricity, wood, heat_pump, etc.)
+                  
+                  roofAreaM2: number
+                  
+                  phase: 1f or 3f
+                  
+                  Language & fuzzy matching rules:
+                  
+                  Match ignoring diacritics, case, punctuation.
+                  Examples treated as identical:
+                  rodiny dom = rodinný dom = RODINNY-DOM = housee = dom
+                  
+                  buildingType fuzzy groups:
+                  
+                  family_house:
+                  rodinny dom, rodinný dom, dom, rd, family house, house, hoouse, familyhouse
+                  
+                  apartment:
+                  byt, bit, aprt, apartman, apartmán, apartment, flat, flatt
+                  
+                  company:
+                  firma, spolocnost, prevadzka, kancelaria, office, company, bussiness
+                  
+                  insulationLevel fuzzy groups:
+                  
+                  poor:
+                  zla, slaba, bez zateplenia, nezatepleny, poor, bad
+                  
+                  average:
+                  priemerna, normalna, average
+                  
+                  good:
+                  dobra, lepsia, good
+                  
+                  excellent:
+                  vyborna, velmi dobra, a0, passive, excellent
+                  
+                  heatingFuel fuzzy groups:
+                  """;
 
     var response = await _openAI.GetCompletion(prompt);
 
@@ -279,21 +321,52 @@ VERY IMPORTANT:
     {
         var missing = new List<string>();
 
-        if (string.IsNullOrEmpty(data?.Location?.Address))
-            missing.Add("address");
-        if (string.IsNullOrEmpty(data?.Building?.BuildingType))
-            missing.Add("buildingType");
-        if (data?.Building?.HeatedAreaM2 == null)
-            missing.Add("heatedAreaM2");
-        if (data?.Consumption?.ElectricityKwhYear == null)
-            missing.Add("electricityKwhYear");
-        if (string.IsNullOrEmpty(data?.Consumption?.HeatingFuel))
-            missing.Add("heatingFuel");
-
-        if (data?.Building?.BuildingType == "family_house")
+        // 1) Adresa / lokalita
+        if (string.IsNullOrWhiteSpace(data?.Location?.Address))
         {
-            if (data?.Roof?.RoofAreaM2 == null)
-                missing.Add("roofAreaM2");
+            missing.Add("address");
+        }
+
+        // 2) Typ budovy
+        if (string.IsNullOrWhiteSpace(data?.Building?.BuildingType))
+        {
+            missing.Add("buildingType");
+        }
+
+        // 3) Vykurovaná plocha
+        if (data?.Building?.HeatedAreaM2 == null)
+        {
+            missing.Add("heatedAreaM2");
+        }
+
+        // 4) Úroveň zateplenia
+        if (string.IsNullOrWhiteSpace(data?.Building?.InsulationLevel))
+        {
+            missing.Add("insulationLevel");
+        }
+
+        // 5) Ročná spotreba elektriny
+        if (data?.Consumption?.ElectricityKwhYear == null)
+        {
+            missing.Add("electricityKwhYear");
+        }
+
+        // 6) Typ paliva / vykurovania
+        if (string.IsNullOrWhiteSpace(data?.Consumption?.HeatingFuel))
+        {
+            missing.Add("heatingFuel");
+        }
+
+        // 7) Plocha strechy
+        if (data?.Roof?.RoofAreaM2 == null)
+        {
+            missing.Add("roofAreaM2");
+        }
+
+        // 8) Fáza – 1f / 3f
+        if (string.IsNullOrWhiteSpace(data?.Electrical?.Phase))
+        {
+            missing.Add("phase");
         }
 
         return missing;
@@ -303,13 +376,32 @@ VERY IMPORTANT:
     {
         return missingField switch
         {
-            "address" => "V ktorej obci alebo meste sa nachádza vaša nehnuteľnosť?",
-            "buildingType" => "Ide o rodinný dom, byt alebo firemnú budovu?",
-            "heatedAreaM2" => "Aká je vykurovaná plocha vašej nehnuteľnosti v m²?",
-            "electricityKwhYear" => "Koľko kWh elektriny spotrebujete ročne? (nájdete na vyúčtovaní)",
-            "heatingFuel" => "Čím kúrite? (plyn, elektrina, drevo, tepelné čerpadlo...)",
-            "roofAreaM2" => "Aká je približná využiteľná plocha vašej strechy v m²?",
-            _ => "Máte ešte nejaké doplňujúce informácie o vašej nehnuteľnosti?"
+            "address" =>
+                "V ktorej obci alebo meste sa nachádza vaša nehnuteľnosť? Môžete uviesť aj ulicu, ak chcete.",
+
+            "buildingType" =>
+                "Ide o rodinný dom, byt alebo firemnú budovu? (napíšte napr. „rodinný dom“ alebo „byt“)",
+
+            "heatedAreaM2" =>
+                "Aká je približná vykurovaná plocha vašej nehnuteľnosti v m²? (napr. 120)",
+
+            "insulationLevel" =>
+                "Ako by ste zhodnotili zateplenie objektu? (žiadne, priemerné, dobré, perfektné)",
+
+            "electricityKwhYear" =>
+                "Koľko kWh elektriny spotrebujete približne za rok? (informáciu nájdete na ročnom vyúčtovaní)",
+
+            "heatingFuel" =>
+                "Čím kúrite? (plyn, elektrina, drevo/pelety, tepelné čerpadlo...)",
+
+            "roofAreaM2" =>
+                "Aká je približná využiteľná plocha vašej strechy v m², na ktorú by sa dala dať fotovoltika?",
+
+            "phase" =>
+                "Máte jednofázovú (1f) alebo trojfázovú (3f) elektrickú prípojku?",
+
+            _ =>
+                "Máte ešte nejaké doplňujúce informácie o vašej nehnuteľnosti?"
         };
     }
 
@@ -331,14 +423,18 @@ VERY IMPORTANT:
     private int CalculateCollectionProgress(UserData data)
     {
         var filled = 0;
-        const int total = 5;
+        const int total = 8; // address, buildingType, heatedAreaM2, insulationLevel, electricityKwhYear, heatingFuel, roofAreaM2, phase
 
-        if (!string.IsNullOrEmpty(data?.Location?.Address)) filled++;
-        if (!string.IsNullOrEmpty(data?.Building?.BuildingType)) filled++;
+        if (!string.IsNullOrWhiteSpace(data?.Location?.Address)) filled++;
+        if (!string.IsNullOrWhiteSpace(data?.Building?.BuildingType)) filled++;
         if (data?.Building?.HeatedAreaM2 != null) filled++;
+        if (!string.IsNullOrWhiteSpace(data?.Building?.InsulationLevel)) filled++;
         if (data?.Consumption?.ElectricityKwhYear != null) filled++;
-        if (!string.IsNullOrEmpty(data?.Consumption?.HeatingFuel)) filled++;
+        if (!string.IsNullOrWhiteSpace(data?.Consumption?.HeatingFuel)) filled++;
+        if (data?.Roof?.RoofAreaM2 != null) filled++;
+        if (!string.IsNullOrWhiteSpace(data?.Electrical?.Phase)) filled++;
 
+        // Tento agent pokrýva 0–25% celkového procesu
         return (filled * 25) / total;
     }
 

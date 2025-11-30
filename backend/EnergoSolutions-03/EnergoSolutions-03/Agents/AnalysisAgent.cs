@@ -1,3 +1,4 @@
+using System.Text.Json;
 using EnergoSolutions_03.Abstraction;
 using EnergoSolutions_03.Models.Agent;
 
@@ -6,22 +7,110 @@ namespace EnergoSolutions_03.Agents;
 public class AnalysisAgent : IAnalysisAgent
 {
     private readonly IOpenAIService _openAI;
+    private readonly IGeocodingService _geocodingService;
+    private readonly ISummaryService _summaryService;
 
-    public AnalysisAgent(IOpenAIService openAi)
+    public AnalysisAgent(IOpenAIService openAI, ISummaryService summaryService, IGeocodingService geocodingService)
     {
-        _openAI = openAi;
+        _openAI = openAI;
+        _summaryService = summaryService;
+        _geocodingService = geocodingService;
     }
     
     public async Task<AgentResponse> Analyze(Session session)
     {
         var userData = session.UserData;
-        var techData = session.TechnicalData;
         
-        // Analyzuj každú technológiu
-        var solarScore = AnalyzeSolar(userData, techData);
-        var windScore = AnalyzeWind(userData, techData);
-        var heatPumpScore = AnalyzeHeatPump(userData, techData);
+        // Získaj súhrn technických dát z SummaryService
+        var geocodeResult = await _geocodingService.GeocodeAsync(userData.Location.Address);
+        float lat = geocodeResult.Latitude;
+        float lon = geocodeResult.Longitude;
+        var technicalSummary = await _summaryService.BuildSummaryAsync(lat, lon);
+        
+        // Serializuj UserData do JSON
+        var userDataJson = JsonSerializer.Serialize(userData, new JsonSerializerOptions { WriteIndented = true });
+        
+        // System message pre AI
+        var systemMessage = @"You are an expert energy consultant specializing in renewable energy technologies for homes across the World. You will receive:
+1. User data (building info, consumption, location) as JSON
+2. Technical data summary (solar radiation, wind speed, climate)
 
+Your task: Analyze the potential for three technologies (Solar, Wind, HeatPump) and return ONLY a valid JSON object with this exact structure:
+
+{
+  ""solar"": {
+    ""score"": 0-100,
+    ""reasoning"": ""brief explanation in Slovak""
+  },
+  ""wind"": {
+    ""score"": 0-100,
+    ""reasoning"": ""brief explanation in Slovak""
+  },
+  ""heatpump"": {
+    ""score"": 0-100,
+    ""reasoning"": ""brief explanation in Slovak""
+  }
+}
+
+Scoring criteria:
+- Solar: radiation quality (40 pts), roof area (30 pts), consumption (30 pts)
+- Wind: avg speed (50 pts), building type (30 pts), locality (20 pts)
+- HeatPump: climate (20 pts), insulation (20 pts), base score 60 pts
+
+Be concise but specific in reasoning. Use Slovak language for reasoning text.";
+
+        var userPrompt = $@"User Data:
+{userDataJson}
+
+Technical Summary:
+{technicalSummary}
+
+Analyze and return JSON only.";
+
+        // Zavolaj OpenAI
+        var aiResult = await _openAI.CreateResponseAsync(systemMessage, userPrompt, model: "gpt-4.1");
+        
+        // Parse AI response
+        TechnologyScore solarScore, windScore, heatPumpScore;
+        
+        try
+        {
+            var aiJson = JsonDocument.Parse(aiResult);
+            var root = aiJson.RootElement;
+            
+            solarScore = new TechnologyScore
+            {
+                Technology = "Solar",
+                Score = root.GetProperty("solar").GetProperty("score").GetInt32(),
+                Reasoning = root.GetProperty("solar").GetProperty("reasoning").GetString() ?? ""
+            };
+            
+            windScore = new TechnologyScore
+            {
+                Technology = "Wind",
+                Score = root.GetProperty("wind").GetProperty("score").GetInt32(),
+                Reasoning = root.GetProperty("wind").GetProperty("reasoning").GetString() ?? ""
+            };
+            
+            heatPumpScore = new TechnologyScore
+            {
+                Technology = "HeatPump",
+                Score = root.GetProperty("heatpump").GetProperty("score").GetInt32(),
+                Reasoning = root.GetProperty("heatpump").GetProperty("reasoning").GetString() ?? ""
+            };
+        }
+        catch (Exception ex)
+        {
+            // Fallback ak AI nevrátil validný JSON
+            return new AgentResponse
+            {
+                Message = $"❌ Chyba pri analýze dát: {ex.Message}\n\nAI odpoveď:\n{aiResult}",
+                IsComplete = false,
+                Progress = 50
+            };
+        }
+        
+        // Ulož výsledky do session
         session.AnalysisResults = new AnalysisResults
         {
             SolarPotential = solarScore,
@@ -52,193 +141,6 @@ Teraz vypočítam optimálnu zostavu pre váš dom...
             Message = message,
             IsComplete = true,
             Progress = 50
-        };
-    }
-
-    private TechnologyScore AnalyzeSolar(UserData userData, TechnicalData techData)
-    {
-        var score = 0;
-        var factors = new List<string>();
-
-        // Slnečné žiarenie (0-40 bodov)
-        var solarRadiation = techData.SolarResource.YearlyKwhPerKwp;
-        if (solarRadiation > 1100)
-        {
-            score += 40;
-            factors.Add($"Výborné slnečné žiarenie ({solarRadiation} kWh/kWp ročne)");
-        }
-        else if (solarRadiation > 950)
-        {
-            score += 30;
-            factors.Add($"Dobré slnečné žiarenie ({solarRadiation} kWh/kWp ročne)");
-        }
-        else if (solarRadiation > 850)
-        {
-            score += 20;
-            factors.Add($"Priemerné slnečné žiarenie ({solarRadiation} kWh/kWp ročne)");
-        }
-        else
-        {
-            score += 10;
-            factors.Add($"Nízke slnečné žiarenie ({solarRadiation} kWh/kWp ročne)");
-        }
-
-        // Strecha (0-30 bodov)
-        if (userData.Building.BuildingType == "family_house" && userData.Roof.RoofAreaM2 > 0)
-        {
-            if (userData.Roof.RoofAreaM2 >= 50)
-            {
-                score += 30;
-                factors.Add($"Veľká využiteľná plocha strechy ({userData.Roof.RoofAreaM2} m²)");
-            }
-            else if (userData.Roof.RoofAreaM2 >= 30)
-            {
-                score += 20;
-                factors.Add($"Dostatočná plocha strechy ({userData.Roof.RoofAreaM2} m²)");
-            }
-            else
-            {
-                score += 10;
-                factors.Add($"Malá plocha strechy ({userData.Roof.RoofAreaM2} m²)");
-            }
-        }
-        else if (userData.Building.BuildingType == "apartment")
-        {
-            score += 0;
-            factors.Add("Byt - obmedzené možnosti inštalácie");
-        }
-
-        // Spotreba (0-30 bodov)
-        if (userData.Consumption.ElectricityKwhYear > 4000)
-        {
-            score += 30;
-            factors.Add("Vysoká spotreba - FV sa rýchlo vráti");
-        }
-        else if (userData.Consumption.ElectricityKwhYear > 2500)
-        {
-            score += 20;
-            factors.Add("Stredná spotreba");
-        }
-        else
-        {
-            score += 10;
-            factors.Add("Nízka spotreba");
-        }
-
-        return new TechnologyScore
-        {
-            Technology = "Solar",
-            Score = score,
-            Reasoning = string.Join(", ", factors)
-        };
-    }
-
-    private TechnologyScore AnalyzeWind(UserData userData, TechnicalData techData)
-    {
-        var score = 0;
-        var factors = new List<string>();
-
-        // Priemerná rýchlosť vetra (0-50 bodov)
-        var windSpeed = techData.WindData.AverageSpeed;
-        if (windSpeed > 6)
-        {
-            score += 50;
-            factors.Add($"Výborný vietor ({windSpeed:F1} m/s)");
-        }
-        else if (windSpeed > 4.5)
-        {
-            score += 30;
-            factors.Add($"Dobrý vietor ({windSpeed:F1} m/s)");
-        }
-        else if (windSpeed > 3.5)
-        {
-            score += 15;
-            factors.Add($"Slabý vietor ({windSpeed:F1} m/s)");
-        }
-        else
-        {
-            score += 0;
-            factors.Add($"Nedostatočný vietor ({windSpeed:F1} m/s)");
-        }
-
-        // Typ budovy (0-30 bodov)
-        if (userData.Building.BuildingType == "family_house")
-        {
-            score += 30;
-            factors.Add("Rodinný dom - možná inštalácia");
-        }
-        else
-        {
-            score += 0;
-            factors.Add("Byt/budova - ťažká inštalácia turbíny");
-        }
-
-        // Lokalita (0-20 bodov) - odhadujeme podľa vetra
-        if (windSpeed > 5)
-        {
-            score += 20;
-            factors.Add("Otvorená lokalita");
-        }
-
-        return new TechnologyScore
-        {
-            Technology = "Wind",
-            Score = Math.Min(score, 100),
-            Reasoning = string.Join(", ", factors)
-        };
-    }
-
-    private TechnologyScore AnalyzeHeatPump(UserData userData, TechnicalData techData)
-    {
-        var score = 60; // Základné skóre - tepelné čerpadlá sú všeobecne dobré
-        var factors = new List<string>();
-
-        // Teplota (0-20 bodov)
-        var avgTemp = techData.ClimateData.YearAverageTemp;
-        if (avgTemp > 10)
-        {
-            score += 20;
-            factors.Add($"Mierna klíma (priemer {avgTemp:F1}°C)");
-        }
-        else if (avgTemp > 7)
-        {
-            score += 15;
-            factors.Add($"Chladnejšia klíma (priemer {avgTemp:F1}°C)");
-        }
-        else
-        {
-            score += 10;
-            factors.Add($"Studená klíma (priemer {avgTemp:F1}°C) - nižšia účinnosť");
-        }
-
-        // Izolácia (0-20 bodov)
-        if (userData.Building.InsulationLevel == "good")
-        {
-            score += 20;
-            factors.Add("Dobrá izolácia - ideálne pre TČ");
-        }
-        else if (userData.Building.InsulationLevel == "average")
-        {
-            score += 10;
-            factors.Add("Priemerná izolácia");
-        }
-        else
-        {
-            score += 0;
-            factors.Add("Zlá izolácia - najprv zatepliť");
-        }
-
-        // Aktuálne kúrenie
-        if (userData.Consumption.HeatingFuel == "electricity" || userData.Consumption.HeatingFuel == "gas")
-        {
-            factors.Add("Jednoduché nahradenie súčasného systému");
-        }
-
-        return new TechnologyScore
-        {
-            Technology = "HeatPump",
-            Score = Math.Min(score, 100),
-            Reasoning = string.Join(", ", factors)
         };
     }
 

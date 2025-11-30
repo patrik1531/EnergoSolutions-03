@@ -39,8 +39,8 @@ public class GeocodingService : IGeocodingService
         return new GeocodeResponseDto
         {
             Address = first.display_name ?? address,
-            Latitude = double.Parse(first.lat, CultureInfo.InvariantCulture),
-            Longitude = double.Parse(first.lon, CultureInfo.InvariantCulture)
+            Latitude = float.Parse(first.lat, CultureInfo.InvariantCulture),
+            Longitude = float.Parse(first.lon, CultureInfo.InvariantCulture)
         };
     }
 }
