@@ -19,7 +19,7 @@ public class OpenAIService : IOpenAIService
         // OpenAI request body
         var requestBody = new
         {
-            model = "gpt-4o-mini",
+            model = "gpt-4.1",
             messages = new[]
             {
                 new { role = "system", content = "You are a strict JSON extraction assistant. Respond ONLY with valid JSON." },
