@@ -17,6 +17,19 @@ public class DataCollectorAgent : IDataCollectorAgent
 
         public async Task<AgentResponse> ProcessMessage(Session session, string message)
         {
+            if (session == null)
+            {
+                return new AgentResponse
+                {
+                    Message = "Internal error: session is null.",
+                    IsComplete = false,
+                    Progress = 0
+                };
+            }
+
+            // Ensure user data and nested objects exist before any updates
+            EnsureUserDataInitialized(session);
+
             // Pri prvej správe
             if (string.IsNullOrEmpty(message))
             {
@@ -40,7 +53,7 @@ public class DataCollectorAgent : IDataCollectorAgent
             {
                 // Generuj otázku pre chýbajúce pole
                 var nextQuestion = GenerateQuestion(missingFields[0], session.UserData);
-                
+
                 return new AgentResponse
                 {
                     Message = nextQuestion,
@@ -60,47 +73,134 @@ public class DataCollectorAgent : IDataCollectorAgent
                 Progress = 25
             };
         }
-        
+
         private async Task<Dictionary<string, object>> ExtractInformation(string message, UserData currentData)
         {
             var basePrompt = $@"
-        Extrahuj informácie z tejto správy: '{message}'
+        You are an information extraction AI. Your job is to analyze the user's message and assign any meaningful values to the correct fields. 
 
-        Aktuálne údaje: {JsonSerializer.Serialize(currentData)}
+        Be flexible: the user may answer with an address, town name, building size, heating type, energy consumption, roof details, or random combinations of these.
 
-        Hľadaj:
-        - address (mesto/obec)
-        - building_type (rodinný dom='family_house', byt='apartment', firma='company')
-        - heated_area_m2 (vykurovaná plocha v m²)
-        - insulation_level (zlá='poor', priemerná='average', dobrá='good')
-        - electricity_kwh_year (ročná spotreba elektriny v kWh)
-        - heating_fuel (plyn='gas', elektrina='electricity', drevo='wood')
-        - roof_area_m2 (plocha strechy v m²)
-        - orientations (orientácia: juh='south', východ='east', západ='west', sever='north')
-        - phase (1f alebo 3f)
+        If the message contains ANY of the following types of information, extract them:
 
-        Respond with a single valid JSON object only (no extra text, no code fences). The JSON object keys should be exactly the names above and missing keys can be omitted.
+        - address → any place, street, city, village, town, postal code
+        - building_type → rodinný dom, byt, firma (map to: family_house, apartment, company)
+        - heated_area_m2 → any number followed by m², m2, alebo bez jednotky if logically area
+        - insulation_level → žiadne/poor, dobré/good, perfektné/excellent
+        - electricity_kwh_year → any number clearly referencing yearly energy consumption
+        - heating_fuel → plyn/gas, elektrina/electricity, drevo/wood, TČ/heatpump
+        - roof_area_m2 → numbers relating to roof size
+        - orientations → juh/south, východ/east, západ/west, sever/north
+        - phase → '1f', '3f', 'jednofázová', 'trojfázová'
+
+        If the user's message is irrelevant, unclear, or unrelated, return:
+        {{ ""irrelevant"": true }}
+
+        Current known data: {JsonSerializer.Serialize(currentData)}
+
+        Return strictly one JSON object with only found keys. No explanation text.
         ";
 
             var response = await _openAI.GetCompletion(basePrompt);
 
-            // Try to extract JSON object from the response (handles model prefix/suffix text)
-            if (TryExtractJson(response, out var json))
+            // basic guard na chyby z OpenAIService
+            if (string.IsNullOrWhiteSpace(response) ||
+                response.StartsWith("AI API error", StringComparison.OrdinalIgnoreCase) ||
+                response.StartsWith("AI network error", StringComparison.OrdinalIgnoreCase) ||
+                response.StartsWith("AI parsing error", StringComparison.OrdinalIgnoreCase))
             {
-                try
-                {
-                    var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                    var dict = JsonSerializer.Deserialize<Dictionary<string, object>>(json, options);
-                    return dict ?? new Dictionary<string, object>();
-                }
-                catch (JsonException)
-                {
-                    // fallthrough to return empty dict on parse error
-                }
+                return new Dictionary<string, object>();
             }
 
-            // If extraction/deserialization failed, return empty dict (agent will ask follow-ups)
-            return new Dictionary<string, object>();
+            Console.WriteLine("=== OpenAI raw ===");
+            Console.WriteLine(response);
+            Console.WriteLine("==================");
+
+            try
+            {
+                // najprv ako Dictionary<string, JsonElement>
+                var raw = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                    response,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+                if (raw == null)
+                {
+                    return new Dictionary<string, object>();
+                }
+
+                // normovaný výstup – kľúče lowercase, bez medzier
+                var result = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var kv in raw)
+                {
+                    var key = kv.Key.Trim().ToLowerInvariant();
+                    var value = kv.Value;
+
+                    // aliasy – keby model vrátil iné názvy
+                    key = key switch
+                    {
+                        "city" or "town" or "mesto" or "obec" => "address",
+                        "roof_area" => "roof_area_m2",
+                        "electricity_consumption" => "electricity_kwh_year",
+                        _ => key
+                    };
+
+                    object? typed = null;
+
+                    switch (value.ValueKind)
+                    {
+                        case JsonValueKind.String:
+                            typed = value.GetString();
+                            break;
+                        case JsonValueKind.Number:
+                            if (value.TryGetInt32(out var i))
+                                typed = i;
+                            else if (value.TryGetDouble(out var d))
+                                typed = d;
+                            break;
+                        case JsonValueKind.True:
+                            typed = true;
+                            break;
+                        case JsonValueKind.False:
+                            typed = false;
+                            break;
+                    }
+
+                    if (typed != null)
+                    {
+                        result[key] = typed;
+                    }
+                }
+
+                return result;
+            }
+            catch (JsonException)
+            {
+                // fallback – ak by AI predsa len poslalo text + JSON
+                if (TryExtractJson(response, out var json))
+                {
+                    try
+                    {
+                        var dict = JsonSerializer.Deserialize<Dictionary<string, object>>(
+                            json,
+                            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+                        // aj tu môžeme spraviť jednoduchú normalizáciu
+                        return dict?
+                                   .ToDictionary(
+                                       kv => kv.Key.Trim().ToLowerInvariant(),
+                                       kv => kv.Value,
+                                       StringComparer.OrdinalIgnoreCase)
+                               ?? new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+                    }
+                    catch
+                    {
+                        // ignore
+                    }
+                }
+
+                return new Dictionary<string, object>();
+            }
         }
 
         private bool TryExtractJson(string input, out string jsonOut)
@@ -140,53 +240,87 @@ public class DataCollectorAgent : IDataCollectorAgent
             return false;
         }
 
-
         private void UpdateUserData(UserData data, Dictionary<string, object> extracted)
         {
-            if (extracted.ContainsKey("address"))
-                data.Location.Address = extracted["address"].ToString();
-            
-            if (extracted.ContainsKey("building_type"))
-                data.Building.BuildingType = extracted["building_type"].ToString();
-            
-            if (extracted.ContainsKey("heated_area_m2") && int.TryParse(extracted["heated_area_m2"].ToString(), out int area))
-                data.Building.HeatedAreaM2 = area;
-            
-            if (extracted.ContainsKey("insulation_level"))
-                data.Building.InsulationLevel = extracted["insulation_level"].ToString();
-            
-            if (extracted.ContainsKey("electricity_kwh_year") && int.TryParse(extracted["electricity_kwh_year"].ToString(), out int kwh))
-                data.Consumption.ElectricityKwhYear = kwh;
-            
-            if (extracted.ContainsKey("heating_fuel"))
-                data.Consumption.HeatingFuel = extracted["heating_fuel"].ToString();
-            
-            if (extracted.ContainsKey("roof_area_m2") && int.TryParse(extracted["roof_area_m2"].ToString(), out int roofArea))
-                data.Roof.RoofAreaM2 = roofArea;
-            
-            if (extracted.ContainsKey("phase"))
-                data.Electrical.Phase = extracted["phase"].ToString();
+            if (data == null || extracted == null || extracted.Count == 0) return;
+
+            if (extracted.TryGetValue("address", out var addrObj) && addrObj != null)
+            {
+                EnsureLocationInitialized(data);
+                data.Location.Address = addrObj.ToString();
+            }
+
+            if (extracted.TryGetValue("building_type", out var btObj) && btObj != null)
+            {
+                EnsureBuildingInitialized(data);
+                data.Building.BuildingType = btObj.ToString();
+            }
+
+            if (extracted.TryGetValue("heated_area_m2", out var areaObj) && areaObj != null)
+            {
+                if (int.TryParse(areaObj.ToString(), out int area))
+                {
+                    EnsureBuildingInitialized(data);
+                    data.Building.HeatedAreaM2 = area;
+                }
+            }
+
+            if (extracted.TryGetValue("insulation_level", out var insObj) && insObj != null)
+            {
+                EnsureBuildingInitialized(data);
+                data.Building.InsulationLevel = insObj.ToString();
+            }
+
+            if (extracted.TryGetValue("electricity_kwh_year", out var kwhObj) && kwhObj != null)
+            {
+                if (int.TryParse(kwhObj.ToString(), out int kwh))
+                {
+                    EnsureConsumptionInitialized(data);
+                    data.Consumption.ElectricityKwhYear = kwh;
+                }
+            }
+
+            if (extracted.TryGetValue("heating_fuel", out var hfObj) && hfObj != null)
+            {
+                EnsureConsumptionInitialized(data);
+                data.Consumption.HeatingFuel = hfObj.ToString();
+            }
+
+            if (extracted.TryGetValue("roof_area_m2", out var roofObj) && roofObj != null)
+            {
+                if (int.TryParse(roofObj.ToString(), out int roofArea))
+                {
+                    EnsureRoofInitialized(data);
+                    data.Roof.RoofAreaM2 = roofArea;
+                }
+            }
+
+            if (extracted.TryGetValue("phase", out var phaseObj) && phaseObj != null)
+            {
+                EnsureElectricalInitialized(data);
+                data.Electrical.Phase = phaseObj.ToString();
+            }
         }
 
         private List<string> GetMissingRequiredFields(UserData data)
         {
             var missing = new List<string>();
 
-            if (string.IsNullOrEmpty(data.Location.Address))
+            if (string.IsNullOrEmpty(data?.Location?.Address))
                 missing.Add("address");
-            if (string.IsNullOrEmpty(data.Building.BuildingType))
+            if (string.IsNullOrEmpty(data?.Building?.BuildingType))
                 missing.Add("building_type");
-            if (data.Building.HeatedAreaM2 == null)
+            if (data?.Building?.HeatedAreaM2 == null)
                 missing.Add("heated_area");
-            if (data.Consumption.ElectricityKwhYear == null)
+            if (data?.Consumption?.ElectricityKwhYear == null)
                 missing.Add("electricity_consumption");
-            if (string.IsNullOrEmpty(data.Consumption.HeatingFuel))
+            if (string.IsNullOrEmpty(data?.Consumption?.HeatingFuel))
                 missing.Add("heating_fuel");
-            
+
             // Pre rodinný dom potrebujeme info o streche
-            if (data.Building.BuildingType == "family_house")
+            if (data?.Building?.BuildingType == "family_house")
             {
-                if (data.Roof.RoofAreaM2 == null)
+                if (data?.Roof?.RoofAreaM2 == null)
                     missing.Add("roof_area");
             }
 
@@ -209,15 +343,15 @@ public class DataCollectorAgent : IDataCollectorAgent
 
         private async Task FetchTechnicalData(Session session)
         {
-            // Zavolaj existujúce API pre technické dáta
-            var location = session.UserData.Location.Address;
-            
+            var location = session?.UserData?.Location?.Address;
+            if (string.IsNullOrWhiteSpace(location)) return;
+
             // Geocoding
             var coords = await _weatherApi.GetCoordinates(location);
-            
+
             // Summary data
             var technicalData = await _weatherApi.GetSummaryData(coords.Lat, coords.Lon);
-            
+
             session.TechnicalData = technicalData;
         }
 
@@ -226,12 +360,47 @@ public class DataCollectorAgent : IDataCollectorAgent
             int filled = 0;
             int total = 5; // Základné povinné polia
 
-            if (!string.IsNullOrEmpty(data.Location.Address)) filled++;
-            if (!string.IsNullOrEmpty(data.Building.BuildingType)) filled++;
-            if (data.Building.HeatedAreaM2 != null) filled++;
-            if (data.Consumption.ElectricityKwhYear != null) filled++;
-            if (!string.IsNullOrEmpty(data.Consumption.HeatingFuel)) filled++;
+            if (!string.IsNullOrEmpty(data?.Location?.Address)) filled++;
+            if (!string.IsNullOrEmpty(data?.Building?.BuildingType)) filled++;
+            if (data?.Building?.HeatedAreaM2 != null) filled++;
+            if (data?.Consumption?.ElectricityKwhYear != null) filled++;
+            if (!string.IsNullOrEmpty(data?.Consumption?.HeatingFuel)) filled++;
 
             return (filled * 25) / total; // 0-25% progress
         }
-    }
+
+        private void EnsureUserDataInitialized(Session session)
+        {
+            if (session.UserData == null) session.UserData = new UserData();
+            EnsureLocationInitialized(session.UserData);
+            EnsureBuildingInitialized(session.UserData);
+            EnsureConsumptionInitialized(session.UserData);
+            EnsureRoofInitialized(session.UserData);
+            EnsureElectricalInitialized(session.UserData);
+        }
+
+        private void EnsureLocationInitialized(UserData data)
+        {
+            if (data.Location == null) data.Location = new Location();
+        }
+
+        private void EnsureBuildingInitialized(UserData data)
+        {
+            if (data.Building == null) data.Building = new Building();
+        }
+
+        private void EnsureConsumptionInitialized(UserData data)
+        {
+            if (data.Consumption == null) data.Consumption = new Consumption();
+        }
+
+        private void EnsureRoofInitialized(UserData data)
+        {
+            if (data.Roof == null) data.Roof = new Roof();
+        }
+
+        private void EnsureElectricalInitialized(UserData data)
+        {
+            if (data.Electrical == null) data.Electrical = new Electrical();
+        }
+}

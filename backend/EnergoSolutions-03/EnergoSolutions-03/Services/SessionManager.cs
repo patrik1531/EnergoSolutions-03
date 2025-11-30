@@ -9,7 +9,8 @@ public class SessionManager : ISessionManager
 
     public Task<string> CreateSession()
     {
-        var sessionId = Guid.NewGuid().ToString();
+        // var sessionId = Guid.NewGuid().ToString();
+        var sessionId = "1";
         _sessions[sessionId] = new Session { SessionId = sessionId };
         return Task.FromResult(sessionId);
     }

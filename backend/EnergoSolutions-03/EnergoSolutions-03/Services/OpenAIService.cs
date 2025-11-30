@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using EnergoSolutions_03.Abstraction;
@@ -7,49 +8,79 @@ namespace EnergoSolutions_03.Services;
 public class OpenAIService : IOpenAIService
 {
     private readonly HttpClient _httpClient;
-    private readonly string _apiKey;
 
-    public OpenAIService(HttpClient httpClient, IConfiguration configuration)
+    public OpenAIService(HttpClient httpClient, IConfiguration config)
     {
         _httpClient = httpClient;
-        _apiKey = configuration["OpenAI:ApiKey"] ?? "sk-your-key";
     }
 
     public async Task<string> GetCompletion(string prompt)
     {
+        // OpenAI request body
+        var requestBody = new
+        {
+            model = "gpt-4o-mini",
+            messages = new[]
+            {
+                new { role = "system", content = "You are a strict JSON extraction assistant. Respond ONLY with valid JSON." },
+                new { role = "user", content = prompt }
+            },
+            temperature = 0
+        };
+
+        // Serialize body
+        var jsonRequest = JsonSerializer.Serialize(requestBody);
+        var content = new StringContent(jsonRequest, Encoding.UTF8, "application/json");
+
+        HttpResponseMessage response;
+
         try
         {
-            var request = new
-            {
-                model = "gpt-3.5-turbo",
-                messages = new[]
-                {
-                    new { role = "system", content = "Si energetický expert. Odpovedaj stručne a v slovenčine." },
-                    new { role = "user", content = prompt }
-                },
-                temperature = 0.7
-            };
-
-            var json = JsonSerializer.Serialize(request);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-                
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
-
-            var response = await _httpClient.PostAsync("https://api.openai.com/v1/chat/completions", content);
-            var responseJson = await response.Content.ReadAsStringAsync();
-                
-            var result = JsonDocument.Parse(responseJson);
-            return result.RootElement
-                .GetProperty("choices")[0]
-                .GetProperty("message")
-                .GetProperty("content")
-                .GetString();
+            response = await _httpClient.PostAsync("chat/completions", content);
         }
-        catch
+        catch (Exception ex)
         {
-            // Fallback pre demo bez OpenAI
-            return "Test response - OpenAI not configured";
+            return $"AI network error: {ex.Message}";
+        }
+
+        var responseJson = await response.Content.ReadAsStringAsync();
+
+        if (!response.IsSuccessStatusCode)
+        {
+            return $"AI API error: {response.StatusCode} → {responseJson}";
+        }
+
+        // Parse OpenAI response
+        try
+        {
+            using var doc = JsonDocument.Parse(responseJson);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("choices", out var choices) &&
+                choices.GetArrayLength() > 0)
+            {
+                var first = choices[0];
+
+                // Standard response
+                if (first.TryGetProperty("message", out var msg) &&
+                    msg.TryGetProperty("content", out var cont))
+                {
+                    return cont.GetString() ?? "";
+                }
+
+                // Streaming delta fallback
+                if (first.TryGetProperty("delta", out var delta) &&
+                    delta.TryGetProperty("content", out var deltaContent))
+                {
+                    return deltaContent.GetString() ?? "";
+                }
+            }
+
+            return "AI error: no 'content' field found in response.";
+        }
+        catch (Exception ex)
+        {
+            return $"AI parsing error: {ex.Message}";
         }
     }
 }

@@ -9,7 +9,13 @@ var builder = WebApplication.CreateBuilder(args);
 
 
 
-builder.Services.AddSingleton<IOpenAIService, OpenAIService>();
+builder.Services.AddHttpClient<IOpenAIService, OpenAIService>(client =>
+{
+    client.BaseAddress = new Uri("https://api.openai.com/v1/");
+    client.DefaultRequestHeaders.Authorization =
+        new AuthenticationHeaderValue("Bearer", builder.Configuration["OpenAI:ApiKey"]);
+});
+
 builder.Services.AddSingleton<IWeatherApiService, WeatherApiService>();
 builder.Services.AddSingleton<ISessionManager, SessionManager>();
 
@@ -69,7 +75,7 @@ builder.Services.AddCors(options =>
     options.AddPolicy("FrontendPolicy", policy =>
     {
         policy
-            .WithOrigins("10.10.95.105:3000")
+            .WithOrigins("http://10.10.95.105:3000")
             .AllowAnyHeader()
             .AllowAnyMethod();
     });
